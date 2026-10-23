@@ -1,0 +1,673 @@
+---
+title: "Untitled"
+author: "Maya Gomez and Jenna Dilworth"
+date: "2026-10-23"
+output:
+  pdf_document:default
+    toc: true
+  html_document:
+    toc: true
+editor_options:
+  chunk_output_type: console
+---
+
+# Set Up
+```{r}
+
+knitr::opts_chunk$set(echo = TRUE) # echo = TRUE means that all code will be printed in a PDF
+
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path)) # set the working directory to the location of this R file
+
+library(tidyverse)
+library(ggrepel)
+library(readxl)
+library(forcats)
+library(ggtext)
+library(dplyr)
+library(janitor)
+library(khroma)
+
+
+# Plot theme
+my_theme <- 
+  theme_bw() +
+  theme(panel.grid.major = element_line(color = "grey95"),
+        panel.grid.minor = element_blank(), 
+        axis.text.x = element_text(size =20, color = "black"),
+        axis.title.x = element_text(size = 22, face="bold"),
+        axis.title.y = element_text(size = 22, face="bold"),
+        axis.text.y = element_text(size = 20, color ="black"),
+        legend.title=element_text(size=22, face="bold"),
+        plot.title = element_text(hjust = 0.5, size=24, face="bold"),
+        legend.text=element_text(size=20))
+        #legend.position = "bottom") 
+
+category_colors <- c("Abiotic" = "#4477AA", "Symbiont" = "#228833", "Host" = "#CCBB44", "Microbiome" = "#66CCEE", "Biotic" = "#EE6677", "Physiological" = "#AA3377")
+
+
+```
+
+# Read In and Wrangle
+```{r}
+
+# Read In
+data <- read_xlsx('FINAL Day 3 Reef Futures Workshop Ranking Survey  (Responses).xlsx') %>% select(2:4,6:45) %>% 
+  rownames_to_column(var="RowID") %>% 
+  mutate(RowID = as.factor(RowID)) %>% 
+  dplyr::rename(Type = "Which workshop session did you attend (if you attended both, choose your primary area of expertise)?",
+                Region = "What primary region do you work in?",
+                Sector = "Which sector do you work in?") 
+
+# How many people are from each sector?
+data %>% select(Sector, RowID) %>% unique() %>% 
+  group_by(Sector) %>% 
+  summarise(count = n())
+
+# How about each region?
+data %>% select(Region, RowID) %>% unique() %>% 
+  group_by(Region) %>% 
+  summarise(count = n())
+
+# Make it long!
+work_long <- data %>%  
+  pivot_longer(5:44 , names_to = "InterventionFull", values_to = "Value") %>% 
+  mutate(InterventionFull = as.factor(InterventionFull)) 
+
+# Change the Sector names
+region_sub <- data.frame(Sector = c("Academia", "National Government", "Nonprofit", 
+                                    "Private/Industry", "State/Local Government"),
+                         Sector2 = c("Academia", "Government", "Nonprofit_Private", "Nonprofit_Private", "Government"))
+                                    
+work_long <- work_long %>% left_join(region_sub, by = "Sector") %>% select(-c(Sector)) %>% 
+  dplyr::rename(Sector = "Sector2")
+
+
+# How many people are from each Sector now?
+work_long %>% select(Sector, RowID) %>% unique() %>% 
+  group_by(Sector) %>% 
+  summarise(count = n())
+
+
+
+# Change the region names
+
+Bahamas_Caribbean = c("British caribbean territories", "Coastal Central and South America", "Greater Antilles", "Lesser Antilles", "Mesoamerican Barrier Reef", "Entire Caribbean", "The Bahamas", "Gulf of Mexico, campeche bank reefs", "Coastal Central and South America", "TCI/UKOTS") 
+pattern <- str_c(Bahamas_Caribbean, collapse = "|")
+
+work_long <- work_long %>% 
+  mutate(Region2 = if_else(str_detect(Region, pattern), "Bahamas_Caribbean", "US_FL")) %>% 
+  select(-c(Region)) %>%
+  dplyr::rename(Region = "Region2")
+  
+
+# What about region now?
+work_long %>% select(Region, RowID) %>% unique() %>% 
+  group_by(Region) %>% 
+  summarise(count = n())
+
+# Generate Intervention Categories  (1x)
+# interventions <- work_long %>% select(Intervention) %>% unique()
+# writexl::write_xlsx(interventions, "/Users/migomez/Downloads/interventions.xlsx")
+# Then manually add in which one each belongs to
+
+# Read In
+categories <- read_xlsx("interventions.xlsx") %>%  
+  mutate(InterventionFull = factor(InterventionFull),
+         Intervention = factor(Intervention),
+         Category = factor(Category, levels = c("Abiotic", "Physiological", "Biotic", "Host", "Symbiont", "Microbiome")))
+
+
+# Wrangle
+work <- work_long %>% 
+  left_join(categories, by="InterventionFull") %>% 
+  mutate(Type = ifelse(Type =="Session 1 (Tuesday)", "Researcher", "Manager/Practitioner"),
+         Type = as.factor(Type),
+         Region = as.factor(Region),
+         Sector = as.factor(Sector)) %>% select(-c(InterventionFull)) 
+
+work <- work %>% 
+  dplyr::rename(InterventionShort = "Intervention") %>% 
+  unite("Intervention", Category, InterventionShort, sep = ": ", remove = FALSE) %>% 
+  mutate(Intervention = factor(Intervention)) %>% 
+  mutate(Value = as.factor(Value))
+
+# Create separate dataframe to reorder interventions by
+intervention_order <- work %>%
+  group_by(Intervention, Value) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = Value, values_from = n, values_fill = 0) %>%
+  # arrange(desc(`1`), desc(`2`), desc(`3`), desc(`4`))%>%
+  arrange(desc(`2`), desc(`1`), desc(`3`), desc(`4`))%>%
+  # arrange(desc(`3`), desc(`1`), desc(`2`), desc(`4`))%>%
+  pull(Intervention)
+
+# Set factor levels
+work$Intervention <- factor(work$Intervention, levels = intervention_order)
+
+coords <- read_xlsx("coords.xlsx") %>% 
+    mutate(Value = as.factor(Value))
+
+work2 <- work %>% 
+  mutate(Value = as.factor(Value)) %>% 
+  left_join(coords, by="Value")
+
+```
+
+## Summary Data
+### Coordinates
+```{r}
+
+Value <- 1:4
+X <- c(0, 1, 0, 1) 
+Y <- c(1, 1, 0, 0) 
+coords2 <- data.frame(Value, X, Y) %>% 
+  mutate(Value = as.factor(Value))
+
+# Lump everyone together
+work_moving_overall <- work %>% #select(-c(InterventionShort)) %>% 
+  left_join(coords2, by = "Value") %>% 
+  group_by(InterventionShort, Category) %>% 
+  summarise(overallX = mean(X),
+            overallY = mean(Y))
+
+intervention_names <- work %>% select(Intervention, InterventionShort)
+
+
+```
+
+Now plot!
+
+#### All
+```{r}
+# Pick a category below:
+cat <- "Biotic"
+cat <- "Abiotic"
+cat <- "Symbiont"
+cat <- "Host"
+cat <- "Microbiome"
+cat <- "Physiological"
+
+# First let's look at all plots for a single category WITH the Researcher and Managers/Practitioners lumped: 
+work_moving_overall$Category<-factor(work_moving_overall$Category,levels=c("Abiotic","Biotic","Symbiont","Host","Microbiome","Physiological"))
+
+# plot everything on quadrant!
+output <- work_moving_overall %>% 
+  ggplot(., aes(x = overallX, y = overallY)) +
+  geom_point(aes(color = Category), size = 5) +
+  geom_text_repel(aes(label = InterventionShort),size=4.25,box.padding = 0.45,max.overlaps=100, 
+                  segment.color = 'grey50', min.segment.length = unit(0, 'lines')) +
+  my_theme +
+  scale_color_manual(values = category_colors) +
+  labs(x = "Risk", y = "Efficacy") +
+  geom_hline(yintercept = 0.5, alpha=0.5, linetype="dashed") +
+  geom_vline(xintercept = 0.5, alpha=0.5, linetype="dashed") +
+  scale_x_continuous(breaks = c(0.23,0.78),limits = c(0,1.03), labels = c("Low", "High"))+
+  scale_y_continuous(breaks = c(0.23,0.78),limits = c(0,1.03), labels = c("Low", "High"))+
+  coord_fixed()+
+  theme(panel.grid.major = element_blank(),
+        legend.position = "top",
+        legend.text = element_text(size =12),
+        legend.title = element_text(size = 14))
+output
+
+ggsave(plot = output,
+     filename = str_c("moving_coord", ".pdf"),
+     width = 14, height = 10, units = "in")
+
+```
+
+#### By Sector
+```{r}
+
+#### By Sector
+
+# Pick a category below:
+cat <- "Biotic"
+cat <- "Abiotic"
+cat <- "Symbiont"
+cat <- "Host"
+cat <- "Microbiome"
+cat <- "Physiological"
+
+# Now separate out by Sector 
+
+count <- work %>% select(Sector, RowID) %>% unique() %>% 
+  group_by(Sector) %>% 
+  summarise(count = n())
+
+work_moving <- work %>% #select(-c(InterventionShort)) %>% 
+  left_join(coords2, by = "Value") %>% 
+  group_by(InterventionShort, Category, Sector) %>% 
+  summarise(MeanX = mean(X),
+            MeanY = mean(Y)) %>%
+  left_join(., work_moving_overall)
+
+work_moving$Category<-factor(work_moving$Category,levels=c("Abiotic","Biotic","Symbiont","Host","Microbiome","Physiological"))
+
+sector_diffs_risk <- work_moving%>%
+  select(InterventionShort, Category, Sector, MeanX, overallX, fisher_disagreement)%>%
+  #filter(fisher_disagreement == "professional")%>%
+  pivot_wider(values_from = "MeanX",names_from = "Sector")
+
+ordered_interventions <- sector_diffs_risk %>%
+  arrange(Category) %>%
+  distinct(InterventionShort) %>%
+  pull(InterventionShort)
+
+sector_diffs_risk <- sector_diffs_risk %>%
+  mutate(InterventionShort = factor(InterventionShort, levels = ordered_interventions))
+
+risk_sector_lollipop<-ggplot(sector_diffs_risk)+
+  geom_segment(aes(x= InterventionShort, xend = InterventionShort,
+                   y = Academia, yend = overallX), color = "grey")+
+  geom_segment(aes(x= InterventionShort, xend = InterventionShort,
+                   y = Government, yend = overallX), color = "grey")+
+  geom_segment(aes(x= InterventionShort, xend = InterventionShort,
+                   y = Nonprofit_Private, yend = overallX), color = "grey")+
+  geom_point(aes(x=InterventionShort, y = Nonprofit_Private, color = Category, group = Category), size = 3, shape = 15)+
+  geom_point(aes(x=InterventionShort, y = Academia, color = Category), size = 3, shape = 16)+
+   geom_point(aes(x=InterventionShort, y = Government, color = Category), size = 3, shape = 17)+
+  geom_point(aes(x=InterventionShort, y = overallX), size= 3, color="black", shape = 1)+
+  scale_color_manual(values = category_colors) +
+  scale_fill_manual(values = category_colors)+
+  geom_hline(yintercept = 0.5, color = "grey")+
+  my_theme +
+  coord_flip() +
+  scale_y_continuous(breaks = c(0.23,0.78),limits = c(0,1.03), labels = c("Lower", "Higher"))+
+  xlab("")+
+  ylab("Change in Risk")+
+  theme(axis.text.y = element_text(size=10),
+        panel.grid.major.x = element_blank(),
+        legend.position = "none")
+risk_sector_lollipop
+
+sector_diffs_efficacy <- work_moving%>%
+  select(InterventionShort, Category, Sector, MeanY, overallY, fisher_disagreement)%>%
+  filter(fisher_disagreement == "professional")%>%
+  pivot_wider(values_from = "MeanY",names_from = "Sector")
+
+ordered_interventions <- sector_diffs_efficacy %>%
+  arrange(Category) %>%
+  distinct(InterventionShort) %>%
+  pull(InterventionShort)
+
+sector_diffs_efficacy <- sector_diffs_efficacy %>%
+  mutate(InterventionShort = factor(InterventionShort, levels = ordered_interventions))
+
+efficacy_sector_lollipop<-ggplot(sector_diffs_efficacy)+
+  geom_segment(aes(x=InterventionShort, xend = InterventionShort,
+                   y = Academia, yend = overallY), color = "grey")+
+  geom_segment(aes(x=InterventionShort, xend = InterventionShort,
+                   y = Government, yend = overallY), color = "grey")+
+  geom_segment(aes(x=InterventionShort, xend = InterventionShort,
+                   y = Nonprofit_Private, yend = overallY), color = "grey")+
+  geom_point(aes(x=InterventionShort, y = Nonprofit_Private, color = Category), shape= 15, size = 3)+
+  geom_point(aes(x=InterventionShort, y = Academia, color = Category), shape=16, size = 3)+
+   geom_point(aes(x=InterventionShort, y = Government, color = Category), shape = 17, size = 3)+
+  geom_point(aes(x=InterventionShort, y = overallY), size= 3, color="black", shape = 1)+
+  geom_hline(yintercept = 0.5, color = "grey")+
+  scale_color_manual(values = category_colors) +
+  scale_fill_manual(values = category_colors)+
+  coord_flip() +
+  my_theme +
+  scale_y_continuous(breaks = c(0.23,0.78),limits = c(0,1.03), labels = c("Lower", "Higher"))+
+  scale_x_discrete(position = "top")+
+  xlab("")+
+  ylab("Change in Efficacy")+
+  theme(axis.text.y = element_text(size=10),
+        panel.grid.major.x = element_blank())
+efficacy_sector_lollipop
+
+
+## QUALITATIVE: need to filter out only the InterventionShort that jumped quadrants
+riskSector_jump <- read_xlsx("interventions.xlsx", sheet = "sector_risk")
+list<-riskSector_jump$Intervention
+
+riskSector_toPlot <- sector_diffs_risk%>%
+  filter(InterventionShort %in% list)
+
+ordered_interventions <- riskSector_toPlot %>%
+  arrange(Category) %>%
+  distinct(InterventionShort) %>%
+  pull(InterventionShort)
+
+riskSector_toPlot <- riskSector_toPlot %>%
+  mutate(InterventionShort = factor(InterventionShort, levels = ordered_interventions))
+
+## need to filter out only the InterventionShort that jumped quadrants
+effSector_jump <- read_xlsx("interventions.xlsx", sheet = "sector_efficacy")
+list<-effSector_jump$Intervention
+
+effSector_toPlot <- sector_diffs_efficacy%>%
+  filter(InterventionShort %in% list)
+
+ordered_interventions <- effSector_toPlot %>%
+  arrange(Category) %>%
+  distinct(InterventionShort) %>%
+  pull(InterventionShort)
+
+effSector_toPlot <- effSector_toPlot %>%
+  mutate(InterventionShort = factor(InterventionShort, levels = ordered_interventions))
+
+```
+
+#### By Region
+```{r}
+
+# Now separate out by Region 
+
+count <- work %>% select(Region, RowID) %>% unique() %>% 
+  group_by(Region) %>% 
+  summarise(count = n())
+
+work_moving <- work %>% #select(-c(InterventionShort)) %>% 
+  left_join(coords2, by = "Value") %>% 
+  group_by(InterventionShort, Category, Region) %>% 
+  summarise(MeanX = mean(X),
+            MeanY = mean(Y)) %>%
+  left_join(., work_moving_overall)
+
+work_moving$Category<-factor(work_moving$Category,levels=c("Abiotic","Biotic","Symbiont","Host","Microbiome","Physiological"))
+
+#RISK
+region_diffs_risk <- work_moving%>%
+  select(InterventionShort, Category, Region, MeanX, overallX, fisher_disagreement)%>%
+  pivot_wider(values_from = "MeanX",names_from = "Region")%>%
+  mutate(risk_difference = (Bahamas_Caribbean - US_FL))
+
+#Fisher figure - risk filter by significant quadrant differences
+significant_region <- region_diffs_risk%>%
+  filter(fisher_disagreement == "geographic")
+
+ordered_interventions <- region_diffs_risk %>%
+  arrange(Category) %>%
+  distinct(InterventionShort) %>%
+  pull(InterventionShort)
+
+region_diffs_risk <- region_diffs_risk %>%
+  mutate(InterventionShort = factor(InterventionShort, levels = ordered_interventions))
+
+#Fisher plot - risk
+risk_region_lollipop<-ggplot(significant_region) +
+  geom_segment(aes(x=InterventionShort, xend = InterventionShort,
+                   y = Bahamas_Caribbean, yend = overallX), color = "grey")+
+  geom_point(aes(x=InterventionShort, y = Bahamas_Caribbean, color = Category), shape = 18, size = 4)+
+  geom_segment(aes(x=InterventionShort, xend = InterventionShort,
+                   y = US_FL, yend = overallX), color = "grey")+
+  geom_point(aes(x=InterventionShort, y = US_FL, color = Category, fill = Category), shape = 25, size = 3)+
+  geom_point(aes(x=InterventionShort, y = overallX), size= 3, color="black", shape = 1)+
+  scale_fill_manual(values = category_colors)+
+  scale_color_manual(values = category_colors)+
+  geom_hline(yintercept = 0.5, color = "grey")+
+  my_theme +
+  coord_flip() +
+  scale_y_continuous(breaks = c(0.23,0.78), limits = c(0,1.03))+
+  xlab("")+
+  ylab("")+
+  theme(axis.text.y = element_text(size=10),
+        panel.grid.major.x = element_blank(),
+        legend.position = "none",
+        axis.text.x = element_blank())
+risk_region_lollipop
+
+#EFFICACY
+region_diffs_efficacy <- work_moving%>%
+  select(InterventionShort, Category, Region, MeanY, overallY, fisher_disagreement)%>%
+  filter(fisher_disagreement == "geographic")%>%
+  pivot_wider(values_from = "MeanY",names_from = "Region")%>%
+  mutate(eff_difference = (Bahamas_Caribbean - US_FL))
+
+ordered_interventions <- region_diffs_efficacy %>%
+  arrange(Category) %>%
+  distinct(InterventionShort) %>%
+  pull(InterventionShort)
+
+region_diffs_efficacy <- region_diffs_efficacy %>%
+  mutate(InterventionShort = factor(InterventionShort, levels = ordered_interventions))
+
+efficacy_region_lollipop<-ggplot(region_diffs_efficacy)+
+  geom_segment(aes(x=InterventionShort, xend = InterventionShort,
+                   y = Bahamas_Caribbean, yend = overallY), color = "grey")+
+  geom_point(aes(x=InterventionShort, y = Bahamas_Caribbean, color = Category), shape = 18, size = 4)+
+  geom_segment(aes(x=InterventionShort, xend = InterventionShort,
+                   y = US_FL, yend = overallY), color = "grey")+
+  geom_point(aes(x=InterventionShort, y = US_FL, color = Category, fill = Category), shape = 25, size = 3)+
+  geom_point(aes(x=InterventionShort, y = overallY), size= 3, color="black", shape = 1)+
+  geom_hline(yintercept = 0.5, color = "grey")+
+  my_theme +
+  scale_color_manual(values = category_colors)+
+  scale_fill_manual(values = category_colors)+
+ coord_flip() +
+  scale_y_continuous(breaks = c(0.23,0.78), limits = c(0,1.03))+
+  scale_x_discrete(position = "top")+
+  xlab("")+
+  ylab("")+
+  theme(axis.text.y = element_text(size=10),
+        panel.grid.major.x = element_blank(),
+        legend.position = "none",
+        axis.text.x = element_blank())
+efficacy_region_lollipop
+
+
+## QUALITATIVE: need to filter out only the InterventionShort that jumped quadrants
+riskRegion_jump <- read_xlsx("interventions.xlsx", sheet = "region_risk")
+list<-riskRegion_jump$Intervention
+
+riskRegion_toPlot <- region_diffs_risk%>%
+  filter(InterventionShort %in% list)
+
+ordered_interventions <- riskRegion_toPlot %>%
+  arrange(Category) %>%
+  distinct(InterventionShort) %>%
+  pull(InterventionShort)
+
+riskRegion_toPlot <- riskRegion_toPlot %>%
+  mutate(InterventionShort = factor(InterventionShort, levels = ordered_interventions))
+
+## need to filter out only the InterventionShort that jumped quadrants
+effRegion_jump <- read_xlsx("interventions.xlsx", sheet = "region_efficacy")
+list<-effRegion_jump$Intervention
+
+effRegion_toPlot <- region_diffs_efficacy%>%
+  filter(InterventionShort %in% list)
+
+ordered_interventions <- effRegion_toPlot %>%
+  arrange(Category) %>%
+  distinct(InterventionShort) %>%
+  pull(InterventionShort)
+
+effRegion_toPlot <- effRegion_toPlot %>%
+  mutate(InterventionShort = factor(InterventionShort, levels = ordered_interventions))
+
+```
+
+## Disagreement / Consensus
+```{r}
+
+work_diff_abs <- work_sep_perc %>% ungroup() %>% select(c(Type, Intervention, InterventionShort, Value, Percentage)) %>%
+  complete(Type, Intervention, Value, fill = list(Percentage = 0)) %>% 
+  group_by(Intervention, Value) %>% 
+  summarise(diff = diff(Percentage),
+            diff_abs = abs(diff(Percentage))) %>% 
+  mutate(total = sum(diff_abs)) %>% 
+  ungroup() %>%
+  mutate(Intervention = reorder(Intervention, diff_abs)) %>% 
+  left_join(ER, by="Value")# %>%  
+  # unite("Quadrant", c("Efficacy","Risk"), sep="x", remove=FALSE) %>%
+
+# create new variable differentiating between the agreed up on and disagreed upon interventions
+# as determined by qualitative differences in quadrant assignments
+riskSector_jump <- read_xlsx("interventions.xlsx", sheet = "sector_risk")
+riskRegion_jump <- read_xlsx("interventions.xlsx", sheet = "region_risk")
+effRegion_jump <- read_xlsx("interventions.xlsx", sheet = "sector_efficacy")
+effSector_jump <- read_xlsx("interventions.xlsx", sheet = "region_efficacy")
+
+disagreements <- riskSector_jump%>%
+  full_join(riskRegion_jump)%>%
+  full_join(effRegion_jump)%>%
+  full_join(effSector_jump)
+
+disagreement_list <- disagreements$Intervention
+
+work_moving_overall <- work_moving_overall%>%
+  mutate(disagreement = case_when(
+    InterventionShort %in% disagreement_list ~ "yes",
+    .default = "no"
+  ))
+
+
+risk_disagreement <- riskSector_jump%>%
+  full_join(riskRegion_jump)
+
+risk_list <- risk_disagreement$Intervention
+
+eff_disagreement <- effSector_jump%>%
+  full_join(effRegion_jump)
+
+eff_list <- eff_disagreement$Intervention
+
+work_moving_overall <- work_moving_overall%>%
+  mutate(risk_disagreement = case_when(
+    InterventionShort %in% risk_list ~ "yes",
+    .default = "no"
+  ))%>%
+  mutate(eff_disagreement = case_when (
+    InterventionShort %in% eff_list ~ "yes",
+    .default = "no"
+  ))%>%
+  mutate(overall_disagreement = case_when(
+    risk_disagreement == "yes" && eff_disagreement == "yes" ~ "both",
+    risk_disagreement == "yes" && eff_disagreement == "no" ~ "risk",
+    risk_disagreement == "no" && eff_disagreement == "yes" ~ "eff",
+    .default = "none"
+  ))
+
+table(work_moving_overall$overall_disagreement)
+
+```
+
+### Fisher's test
+```{r}
+## testing for differences in quadrant assignment by region and sector
+# Fisher's exact test because our cell counts can be smaller than 5
+fisher_df <- work %>%
+  select(RowID, Value, Sector, Region, InterventionShort)%>%
+  pivot_wider(names_from = InterventionShort, values_from = Value)%>%
+  clean_names()%>%
+  select(-row_id)
+
+fisher_long <- fisher_df %>%
+  pivot_longer(
+    cols = -c(region, sector),
+    names_to = "intervention",
+    values_to = "score"
+  ) %>%
+  mutate(score = factor(score))
+
+
+run_fisher <- function(data, group_var) {
+  
+  tab <- table(data[[group_var]], data$score)
+  
+  # Remove score columns with all 0
+  tab <- tab[, colSums(tab) > 0, drop = FALSE]
+  
+  # Only test if valid table
+  if (nrow(tab) > 1 && ncol(tab) > 1) {
+    test <- fisher.test(tab)
+    return(test$p.value)
+  } else {
+    return(NA_real_)
+  }
+}
+
+results <- fisher_long %>%
+  group_by(intervention) %>%
+  summarise(
+    p_geo = run_fisher(cur_data(), "region"),
+    p_sector = run_fisher(cur_data(), "sector"),
+    .groups = "drop"
+  ) %>%
+  pivot_longer(
+    cols = starts_with("p_"),
+    names_to = "test",
+    values_to = "p_value"
+  ) %>%
+  mutate(
+    test = recode(test,
+                  p_geo = "Geographic Location",
+                  p_sector = "Professional Sector"),
+    p_adjusted = p.adjust(p_value, method = "BH")
+  )
+
+write.csv(results, file = "quadrant_Fisher.csv")
+
+# testing for regional/sector differences in assignment along risk and efficacy axes
+fisher_axes <- fisher_long %>%
+  mutate(efficacy = case_when(
+    score == 1 ~ "high",
+    score == 2 ~ "high",
+    score == 3 ~ "low",
+    score == 4 ~ "low"
+  ))%>%
+  mutate(risk = case_when(
+    score == 1 ~ "low",
+    score == 2 ~ "high",
+    score == 3 ~ "low",
+    score == 4 ~ "high"
+  ))
+
+#efficacy
+fisher_efficacy <- fisher_axes%>%
+  select(-score, -risk)%>%
+  rename("score" = "efficacy")
+
+efficacy_results <- fisher_efficacy %>%
+  group_by(intervention) %>%
+  summarise(
+    p_geo = run_fisher(cur_data(), "region"),
+    p_sector = run_fisher(cur_data(), "sector"),
+    .groups = "drop"
+  ) %>%
+  pivot_longer(
+    cols = starts_with("p_"),
+    names_to = "test",
+    values_to = "p_value"
+  ) %>%
+  mutate(
+    test = recode(test,
+                  p_geo = "Geographic Location",
+                  p_sector = "Professional Sector"),
+    p_adjusted = p.adjust(p_value, method = "BH")
+  )
+
+write.csv(efficacy_results, file = "efficacy_Fisher.csv")
+
+#risk
+fisher_risk <- fisher_axes%>%
+  select(-score, -efficacy)%>%
+  rename("score" = "risk")
+
+risk_results <- fisher_risk %>%
+  group_by(intervention) %>%
+  summarise(
+    p_geo = run_fisher(cur_data(), "region"),
+    p_sector = run_fisher(cur_data(), "sector"),
+    .groups = "drop"
+  ) %>%
+  pivot_longer(
+    cols = starts_with("p_"),
+    names_to = "test",
+    values_to = "p_value"
+  ) %>%
+  mutate(
+    test = recode(test,
+                  p_geo = "Geographic Location",
+                  p_sector = "Professional Sector"),
+    p_adjusted = p.adjust(p_value, method = "BH")
+  )
+
+write.csv(risk_results, file = "risk_Fisher.csv")
+
+```
+
